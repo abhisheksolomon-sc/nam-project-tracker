@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shared Real-time Task Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 1rem;
+        }
+        .task-card {
+            background-color: white;
+            padding: 1rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: all 0.2s ease-in-out;
+            transform-origin: center;
+            display: grid;
+            grid-template-columns: 1fr 1.5fr 0.8fr 1.5fr 1fr 1fr auto;
+            align-items: center;
+            gap: 1rem;
+        }
+        .task-card.completed {
+            background-color: #e5e7eb;
+        }
+        .task-card:hover {
+            transform: translateY(-4px) scale(1.02);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .task-text.completed {
+            text-decoration: line-through;
+            color: #6b7280;
+        }
+        .input-editor {
+            width: 100%;
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            border: 2px solid #3b82f6;
+            outline: none;
+        }
+        .select-editor {
+            width: 100%;
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            border: 1px solid #d1d5db;
+            background-color: #f9fafb;
+            color: #1f2937;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            cursor: pointer;
+        }
+        @media (max-width: 640px) {
+            .task-card {
+                grid-template-columns: 1fr;
+            }
+            .task-card .flex-shrink-0 {
+                width: 100%;
+                justify-content: flex-end;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <!-- Main Container -->
+    <div class="bg-white rounded-xl shadow-2xl p-6 md:p-10 w-full max-w-5xl transform transition-all duration-300">
+        <h1 class="text-3xl font-extrabold text-gray-800 text-center mb-2">Shared Real-time Task Tracker</h1>
+        <p class="text-gray-500 text-sm text-center mb-6">Collaborate on tasks with anyone you share this link with.</p>
+        <p id="user-id-display" class="text-xs text-gray-400 text-center mb-4"></p>
+
+        <!-- New Task and Import Section -->
+        <div class="flex flex-col sm:flex-row items-center gap-2 mb-6 p-2 bg-gray-50 rounded-lg shadow-inner">
+            <input type="text" id="task-input" placeholder="Enter a new task..."
+                   class="flex-grow p-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors duration-200">
+            <button id="add-task-btn"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-transform duration-200 transform hover:scale-105 active:scale-95 shadow-md w-full sm:w-auto">
+                Add Task
+            </button>
+        </div>
+
+        <!-- Task List Header (Excel-like) -->
+        <div id="task-header" class="task-card font-bold text-gray-600 border-b-2 border-gray-200 mb-4 p-4 rounded-none shadow-none">
+            <div class="cursor-pointer flex items-center gap-1" data-field="initiative">
+                <p>Initiative</p><span class="sort-arrow"></span>
+            </div>
+            <div class="cursor-pointer flex items-center gap-1" data-field="task">
+                <p>Task</p><span class="sort-arrow"></span>
+            </div>
+            <div class="cursor-pointer flex items-center gap-1" data-field="priority">
+                <p>Priority</p><span class="sort-arrow"></span>
+            </div>
+            <div class="cursor-pointer flex items-center gap-1" data-field="nextSteps">
+                <p>Next Steps</p><span class="sort-arrow"></span>
+            </div>
+            <div class="cursor-pointer flex items-center gap-1" data-field="status">
+                <p>Status</p><span class="sort-arrow"></span>
+            </div>
+            <div class="cursor-pointer flex items-center gap-1" data-field="owner">
+                <p>Owner</p><span class="sort-arrow"></span>
+            </div>
+            <div>
+                <p>Actions</p>
+            </div>
+        </div>
+
+        <!-- Task List -->
+        <div id="task-list" class="space-y-4">
+            <!-- Tasks will be rendered here dynamically -->
+        </div>
+
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc, updateDoc, doc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Use the provided global variables
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // --- Data from your CSV file ---
+        const csvData = [
+            { initiative: "NAM Rail Scheduling Model", task: "$ Value Capture - Methodology", priority: "High", nextSteps: "Abhishek to finalize value cap pillars", status: "In Progress", owner: "Abhishek" },
+            { initiative: "NAM Rail Scheduling Model", task: "$ Value Capture - Execution", priority: "High", nextSteps: "Abhishek to work with tech team to retrieve data and present to SC", status: "In Progress", owner: "Abhishek" },
+            { initiative: "NAM Rail Scheduling Model", task: "4-week view - Scope out + Timelines", priority: "Medium", nextSteps: "Abhishek/Felipe to agree on methodology - Finer points Abhishek/William to break out functionality into backlog items Tech team to estimate", status: "In Progress", owner: "Abhishek/Felipe" },
+            { initiative: "NAM Rail Scheduling Model", task: "Scope out fleet sizing tactical model", priority: "Low", nextSteps: "No immediate next steps - To be prioritized", status: "Not Started", owner: "Abhishek/Felipe" },
+            { initiative: "Daily Hopper Optimization", task: "Localized Support - Transfer to Felipe - Discuss w/Althaf", priority: "High", nextSteps: "Makoto to initiate conversation with Althaf", status: "Not Started", owner: "Makoto" },
+            { initiative: "Daily Hopper Optimization", task: "Build enhancement backlog/Prioritize", priority: "Low", nextSteps: "No immediate next steps - To be prioritized", status: "Not Started", owner: "Abhishek/Felipe" },
+            { initiative: "Legacy Viterra NA Shuttles", task: "TPM Model - Expand to lane/car level", priority: "High", nextSteps: "Niranjan to align with Felipe on technical feasibility/methodology - Timelines next", status: "In Progress", owner: "Niranjan/Felipe/Abhishek" },
+            { initiative: "Legacy Viterra NA Shuttles", task: "MPD Model", priority: "High", nextSteps: "Niranjan to align with Felipe on technical feasibility/methodology - Timelines next", status: "In Progress", owner: "Niranjan/Felipe/Abhishek" },
+            { initiative: "Legacy Viterra NA Shuttles", task: "Secondary freight predictions", priority: "Low", nextSteps: "Niranjan to align with Felipe on technical feasibility/methodology - Timelines next", status: "Not Started", owner: "Niranjan/Felipe/Abhishek" },
+            { initiative: "Legacy Viterra NA Shuttles", task: "Data Automation + Dashboard - Scope out", priority: "High", nextSteps: "Abhishek to prioritize and set up a workshop with Lori", status: "Not Started", owner: "Felipe/Abhishek" },
+            { initiative: "Legacy Viterra NA Shuttles", task: "Scheduling Optimization", priority: "Low", nextSteps: "No immediate next steps - To be prioritized (Possible UMSL student project to evaluate?)", status: "Not Started", owner: "Felipe/Abhishek" },
+            { initiative: "Legacy Viterra CA", task: "Organize Meeting in STL - Jared/Melissa/Abhishek/Jessica/Niranjan/Felipe", priority: "Medium", nextSteps: "Need guidance on this one", status: "Not Started", owner: "Jessica/Makoto" },
+            { initiative: "Barge Optimization", task: "Organize discovery with Jesssica", priority: "Medium", nextSteps: "", status: "Completed", owner: "Abhishek" },
+            { initiative: "Barge Optimization", task: "Scope and Prioritize: Barge Load Projections, Barge Freight Positions, Barge Pipeline Optimization, Polo Obligations /Crush Obligations", priority: "Medium", nextSteps: "Initial meeting with Jessica concluded - Need guidance on how (mostly when) to proceed.", status: "Not Started", owner: "Felipe/Abhishek" },
+            { initiative: "Hopper Trucks", task: "GIA - Address KPI Concerns", priority: "High", nextSteps: "Makoto to discuss with GIA/Diego", status: "Not Started", owner: "Makoto" },
+            { initiative: "Hopper Trucks", task: "Data Products/BI Capabilities", priority: "Medium", nextSteps: "Meeting with Enricco set up for 24th", status: "Not Started", owner: "Felipe/Luke?" },
+            { initiative: "Hopper Trucks", task: "O-D Pair Optimization - Scope", priority: "Medium", nextSteps: "Meeting with Enricco set up for 25th", status: "Not Started", owner: "Felipe/Abhishek" }
+        ];
+
+        // --- Firebase Initialization ---
+        // Set Firebase log level for debugging
+        setLogLevel('debug');
+        
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // --- DOM Elements ---
+        const taskInput = document.getElementById('task-input');
+        const addTaskBtn = document.getElementById('add-task-btn');
+        const taskList = document.getElementById('task-list');
+        const userIdDisplay = document.getElementById('user-id-display');
+        const taskHeader = document.getElementById('task-header');
+
+        let userId = null;
+        let tasksRef = null;
+        let currentSortField = null;
+        let sortDirection = 'asc';
+        let currentTasks = [];
+        const statusOptions = ["Not Started", "In Progress", "Completed", "Blocked"];
+        const priorityOptions = ["High", "Medium", "Low", "Not Set"];
+
+        // Wait for authentication state to be ready
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                userIdDisplay.textContent = `User ID: ${userId}`;
+                initializeAppWithUser();
+            } else {
+                // If the user isn't authenticated yet, try to sign them in.
+                if (initialAuthToken) {
+                    try {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } catch (error) {
+                        console.error("Error signing in with custom token:", error);
+                        // Fallback to anonymous sign-in if custom token fails
+                        await signInAnonymously(auth);
+                    }
+                } else {
+                    await signInAnonymously(auth);
+                }
+            }
+        });
+
+        // --- App Logic ---
+        function initializeAppWithUser() {
+            // Firestore collection path is now public for all users to access
+            tasksRef = collection(db, `artifacts/${appId}/public/data/tasks`);
+
+            // Check if database is empty and populate it if needed
+            getDocs(tasksRef).then(snapshot => {
+                if (snapshot.empty) {
+                    csvData.forEach(task => {
+                        addDoc(tasksRef, {
+                            initiative: task.initiative,
+                            task: task.task,
+                            priority: task.priority,
+                            nextSteps: task.nextSteps,
+                            status: task.status,
+                            owner: task.owner,
+                            completed: task.status === 'Completed',
+                            lastUpdatedBy: userId,
+                            lastUpdatedAt: new Date()
+                        }).catch(error => {
+                            console.error("Error adding document:", error);
+                        });
+                    });
+                }
+            }).catch(error => {
+                console.error("Error checking database:", error);
+            });
+            
+            // Listen for real-time changes to the tasks collection
+            onSnapshot(tasksRef, (snapshot) => {
+                currentTasks = [];
+                snapshot.forEach(doc => {
+                    currentTasks.push({ id: doc.id, ...doc.data() });
+                });
+                renderTasks(currentTasks);
+            }, (error) => {
+                console.error("Error getting real-time updates:", error);
+                // Display a user-friendly message
+                taskList.innerHTML = `<p class="text-center text-red-500">Error loading tasks. Please try again later.</p>`;
+            });
+
+            // Add new task
+            addTaskBtn.addEventListener('click', async () => {
+                const taskText = taskInput.value.trim();
+                if (taskText) {
+                    try {
+                        await addDoc(tasksRef, {
+                            initiative: "",
+                            task: taskText,
+                            priority: "Not Set",
+                            nextSteps: "",
+                            status: "Not Started",
+                            owner: userId,
+                            completed: false,
+                            lastUpdatedBy: userId,
+                            lastUpdatedAt: new Date()
+                        });
+                        taskInput.value = ''; // Clear input field
+                    } catch (error) {
+                        console.error("Error adding document:", error);
+                    }
+                }
+            });
+
+            // Handle key press for adding task
+            taskInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    addTaskBtn.click();
+                }
+            });
+
+            // Handle task actions (complete, delete) using event delegation
+            taskList.addEventListener('click', async (e) => {
+                const taskId = e.target.closest('.task-card')?.dataset.id;
+                if (!taskId) return;
+
+                const taskRef = doc(db, `artifacts/${appId}/public/data/tasks`, taskId);
+
+                if (e.target.classList.contains('complete-btn')) {
+                    const isCompleted = e.target.closest('.task-card').classList.contains('completed');
+                    try {
+                        await updateDoc(taskRef, {
+                            completed: !isCompleted,
+                            lastUpdatedBy: userId,
+                            lastUpdatedAt: new Date()
+                        });
+                    } catch (error) {
+                        console.error("Error updating task:", error);
+                    }
+                } else if (e.target.classList.contains('delete-btn')) {
+                    try {
+                        await deleteDoc(taskRef);
+                    } catch (error) {
+                        console.error("Error deleting task:", error);
+                    }
+                }
+            });
+
+            // Handle in-place editing for various fields
+            taskList.addEventListener('dblclick', (e) => {
+                const element = e.target;
+                const field = element.dataset.field;
+                if (!field || ['priority', 'status'].includes(field)) return;
+
+                const taskId = element.closest('.task-card').dataset.id;
+                const originalText = element.textContent;
+
+                // Create and replace with an input field
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = originalText;
+                input.className = 'input-editor';
+                element.replaceWith(input);
+                input.focus();
+
+                const saveEdit = async () => {
+                    const newText = input.value.trim();
+                    if (newText && newText !== originalText) {
+                        try {
+                            const taskRef = doc(db, `artifacts/${appId}/public/data/tasks`, taskId);
+                            await updateDoc(taskRef, {
+                                [field]: newText,
+                                lastUpdatedBy: userId,
+                                lastUpdatedAt: new Date()
+                            });
+                        } catch (error) {
+                            console.error("Error updating document:", error);
+                        }
+                    }
+                    // Replace input with the updated text element
+                    const newElement = document.createElement('span');
+                    newElement.className = element.className;
+                    newElement.dataset.field = field;
+                    newElement.textContent = newText || originalText;
+                    input.replaceWith(newElement);
+                };
+
+                input.addEventListener('blur', saveEdit);
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        saveEdit();
+                    }
+                });
+            });
+
+            // Handle sorting when a header is clicked
+            taskHeader.addEventListener('click', (e) => {
+                const header = e.target.closest('div[data-field]');
+                if (!header) return;
+
+                const newSortField = header.dataset.field;
+
+                if (currentSortField === newSortField) {
+                    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSortField = newSortField;
+                    sortDirection = 'asc';
+                }
+                renderTasks(currentTasks);
+            });
+        }
+
+        // Render tasks to the UI
+        function renderTasks(tasks) {
+            taskList.innerHTML = '';
+
+            // Sort tasks based on currentSortField and sortDirection
+            const sortedTasks = [...tasks].sort((a, b) => {
+                const aValue = a[currentSortField] || '';
+                const bValue = b[currentSortField] || '';
+                
+                // Custom sort order for Priority
+                if (currentSortField === 'priority') {
+                    const aIndex = priorityOptions.indexOf(aValue);
+                    const bIndex = priorityOptions.indexOf(bValue);
+                    return sortDirection === 'asc' ? aIndex - bIndex : bIndex - aIndex;
+                }
+
+                // Custom sort order for Status
+                if (currentSortField === 'status') {
+                    const aIndex = statusOptions.indexOf(aValue);
+                    const bIndex = statusOptions.indexOf(bValue);
+                    return sortDirection === 'asc' ? aIndex - bIndex : bIndex - aIndex;
+                }
+
+                // Default string comparison for other fields
+                return sortDirection === 'asc' ? String(aValue).localeCompare(String(bValue)) : String(bValue).localeCompare(String(aValue));
+            });
+
+            // Update sort arrows in the header
+            document.querySelectorAll('.sort-arrow').forEach(arrow => arrow.textContent = '');
+            if (currentSortField) {
+                const activeHeader = document.querySelector(`[data-field="${currentSortField}"] .sort-arrow`);
+                if (activeHeader) {
+                    activeHeader.textContent = sortDirection === 'asc' ? '▲' : '▼';
+                }
+            }
+
+            if (sortedTasks.length === 0) {
+                taskList.innerHTML = `<p class="text-center text-gray-400 mt-8">You have no tasks! Add one above to start collaborating.</p>`;
+                return;
+            }
+
+            sortedTasks.forEach(task => {
+                const li = document.createElement('div');
+                li.className = `task-card ${task.completed ? 'completed' : ''} transition-all duration-300`;
+                li.dataset.id = task.id;
+
+                const lastUpdatedDate = task.lastUpdatedAt ? new Date(task.lastUpdatedAt.seconds * 1000).toLocaleString() : 'N/A';
+                const lastUpdatedByUser = task.lastUpdatedBy === userId ? 'You' : task.lastUpdatedBy;
+
+                const getStatusSelect = (currentStatus) => {
+                    const select = document.createElement('select');
+                    select.className = 'select-editor';
+                    select.dataset.field = 'status';
+                    select.onchange = async (e) => {
+                        const newStatus = e.target.value;
+                        const taskRef = doc(db, `artifacts/${appId}/public/data/tasks`, task.id);
+                        await updateDoc(taskRef, {
+                            status: newStatus,
+                            completed: newStatus === 'Completed',
+                            lastUpdatedBy: userId,
+                            lastUpdatedAt: new Date()
+                        });
+                    };
+                    statusOptions.forEach(option => {
+                        const opt = document.createElement('option');
+                        opt.value = option;
+                        opt.textContent = option;
+                        if (option === currentStatus) {
+                            opt.selected = true;
+                        }
+                        select.appendChild(opt);
+                    });
+                    return select.outerHTML;
+                };
+
+                const getPrioritySelect = (currentPriority) => {
+                    const select = document.createElement('select');
+                    select.className = 'select-editor';
+                    select.dataset.field = 'priority';
+                    select.onchange = async (e) => {
+                        const newPriority = e.target.value;
+                        const taskRef = doc(db, `artifacts/${appId}/public/data/tasks`, task.id);
+                        await updateDoc(taskRef, {
+                            priority: newPriority,
+                            lastUpdatedBy: userId,
+                            lastUpdatedAt: new Date()
+                        });
+                    };
+                    priorityOptions.forEach(option => {
+                        const opt = document.createElement('option');
+                        opt.value = option;
+                        opt.textContent = option;
+                        if (option === currentPriority) {
+                            opt.selected = true;
+                        }
+                        select.appendChild(opt);
+                    });
+                    return select.outerHTML;
+                };
+                
+                const taskContent = `
+                    <span class="text-sm font-medium text-gray-700" data-field="initiative">${task.initiative || 'N/A'}</span>
+                    <span class="task-text text-md font-medium text-gray-700 ${task.completed ? 'completed' : ''}" data-field="task">${task.task}</span>
+                    ${getPrioritySelect(task.priority)}
+                    <span class="text-sm font-medium text-gray-700" data-field="nextSteps">${task.nextSteps || 'N/A'}</span>
+                    ${getStatusSelect(task.status)}
+                    <span class="text-sm font-medium text-gray-700" data-field="owner">${task.owner || 'N/A'}</span>
+                    <div class="flex-shrink-0 flex items-center gap-2 mt-2 sm:mt-0">
+                        <button class="complete-btn p-2 rounded-full hover:bg-green-200 transition-colors duration-200"
+                                aria-label="Toggle completion">
+                            <svg class="w-6 h-6 text-green-500 pointer-events-none" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                        </button>
+                        <button class="delete-btn p-2 rounded-full hover:bg-red-200 transition-colors duration-200"
+                                aria-label="Delete task">
+                            <svg class="w-6 h-6 text-red-500 pointer-events-none" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm6 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd"></path>
+                            </svg>
+                        </button>
+                    </div>
+                `;
+                li.innerHTML = taskContent;
+                taskList.appendChild(li);
+            });
+        }
+    </script>
+</body>
+</html>
